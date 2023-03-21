@@ -45,11 +45,55 @@ defmodule ExAssignment.Todos do
   ASSIGNMENT: ...
   """
   def get_recommended() do
-    list_todos(:open)
-    |> case do
-      [] -> nil
-      todos -> Enum.take_random(todos, 1) |> List.first()
+    if(todo = get_currently_recommended()) do
+      todo
+    else
+      list_todos(:open)
+      |> case do
+        [] ->
+          nil
+
+        todos ->
+          {:ok, todo} =
+            todos
+            |> calculate_recommendation()
+            |> update_todo(%{recommended: true})
+
+          todo
+      end
     end
+  end
+
+  defp get_currently_recommended() do
+    from(t in Todo, where: not t.done and t.recommended)
+    |> Repo.one()
+  end
+
+  def calculate_recommendation(todos) do
+    priorities_inverted =
+      for t <- todos do
+        Map.put_new(t, :inverse_priority, 1.00 / t.priority)
+      end
+
+    sum_priorities =
+      Enum.reduce(priorities_inverted, 0, fn x, acc -> acc + x.inverse_priority end)
+
+    # Normalize the priorities into a probability distribution 
+    priorities =
+      for p <- priorities_inverted do
+        Map.put_new(p, :normalized_priority, p.inverse_priority / sum_priorities)
+      end
+
+    choice = :rand.uniform()
+
+    Enum.reduce(priorities, {nil, 0}, fn x, {current, acc} ->
+      if acc + x.normalized_priority >= choice && choice >= acc && current == nil do
+        {x, acc + x.normalized_priority}
+      else
+        {current, acc + x.normalized_priority}
+      end
+    end)
+    |> elem(0)
   end
 
   @doc """
@@ -144,7 +188,7 @@ defmodule ExAssignment.Todos do
   """
   def check(id) do
     {_, _} =
-      from(t in Todo, where: t.id == ^id, update: [set: [done: true]])
+      from(t in Todo, where: t.id == ^id, update: [set: [done: true, recommended: false]])
       |> Repo.update_all([])
 
     :ok
